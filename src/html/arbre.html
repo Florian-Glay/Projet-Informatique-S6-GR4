@@ -4,12 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Connecteur de Rectangles</title>
+  <script type="module" crossorigin src="/Projet-Informatique-S6-GR4/assets/arbre-CEshMJmL.js"></script>
+  <link rel="modulepreload" crossorigin href="/Projet-Informatique-S6-GR4/assets/modulepreload-polyfill-B5Qt9EMX.js">
   <link rel="stylesheet" crossorigin href="/Projet-Informatique-S6-GR4/assets/arbre-CtRpBoq9.css">
 </head>
 <body>
 
     <!-- Canvas Area -->
-    <main id="canvas" class="canvas-area" onmousedown="deselectAll(event)">
+    <main id="canvas" class="canvas-area">
         <!-- SVG Layer for connections -->
         <svg id="svg-layer">
             <!-- Paths will be injected here -->
@@ -22,9 +24,7 @@
             Cliquez sur un rectangle pour l'éditer. Glissez pour déplacer.
         </div>
         
-        <button onclick="createNode()" class="btn-add">
-            + Ajouter un Rectangle
-        </button>
+        <button id="btnAdd" class="btn-add">+ Ajouter un Rectangle</button>
     </main>
 
     <!-- Sidebar Properties Panel -->
@@ -43,7 +43,6 @@
         </div>
 
     </aside>
-
-    <script src="/src/JS/arbre.js"></script>
+
 </body>
 </html>
