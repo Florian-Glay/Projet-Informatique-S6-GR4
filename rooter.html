@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <title>Routing…</title>
+</head>
+<body>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const goTo = params.get("goTo"); // "editor", "app", etc
+
+    const BASE = window.location.pathname
+      .split("/")
+      .slice(0, -1)
+      .join("/") + "/";
+
+    switch (goTo) {
+      case "editor":
+        window.location.replace(BASE + "src/html/editor.html");
+        break;
+
+      case "app":
+      default:
+        window.location.replace(BASE);
+    }
+  </script>
+</body>
+</html>
