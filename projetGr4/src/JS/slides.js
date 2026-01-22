@@ -184,13 +184,21 @@ export function generateSlideHTML(slideIndex) {
 
   // --- META qu’on veut sauvegarder dans le HTML ---
   // Position par défaut 0,0 (comme demandé)
-  const meta = {
-    version: 1,
-    title: slide.title ?? `Slide ${slideIndex + 1}`,
-    pos: { x: 0, y: 0 },
-    // rempli plus bas en fonction des boutons réellement présents
-    buttons: []
-  };
+  const meta =
+  slide.arbre && typeof slide.arbre === "object"
+    ? {
+        title:
+          typeof slide.arbre.title === "string"
+            ? slide.arbre.title
+            : null,
+        pos:
+          slide.arbre.pos &&
+          typeof slide.arbre.pos.x === "number" &&
+          typeof slide.arbre.pos.y === "number"
+            ? { x: slide.arbre.pos.x, y: slide.arbre.pos.y }
+            : { x: 0, y: 0 }
+      }
+    : null;
 
   let html = `<!DOCTYPE html>
 <html lang="fr">
