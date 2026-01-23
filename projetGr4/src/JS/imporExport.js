@@ -75,7 +75,7 @@ function hrefToLinkValue(href) {
   const s = String(href).trim();
   if (!s) return null;
 
-  // ✅ Si c'est déjà un numéro (depuis data-link), on le garde
+  // Si c'est déjà un numéro (depuis data-link), on le garde
   if (/^\d+$/.test(s)) return s;
 
   // Externe => on garde tel quel
@@ -83,13 +83,13 @@ function hrefToLinkValue(href) {
 
   // Nos formats internes possibles
   let m = s.match(/^slide-(\d+)\.html$/i);
-  if (m) return m[1]; // ✅ "slide-2.html" -> "2"
+  if (m) return m[1]; // "slide-2.html" -> "2"
 
   m = s.match(/^#slide:(\d+)$/i);
-  if (m) return m[1]; // ✅ "#slide:2" -> "2"
+  if (m) return m[1]; // "#slide:2" -> "2"
 
   m = s.match(/^#slide-(\d+)$/i);
-  if (m) return m[1]; // ✅ "#slide-2" -> "2"
+  if (m) return m[1]; // "#slide-2" -> "2"
 
   // Sinon on garde (ex: "page.html" ou autre)
   return s;
@@ -129,6 +129,77 @@ function readSlideMeta(doc) {
   };
 }
 
+function readSlideBackgroundColor(doc) {
+  const slide = doc.querySelector(".stage .slide");
+  if (!slide) return null;
+
+  const style = slide.getAttribute("style") || "";
+
+  // 1) background-color
+  let m = style.match(/background-color\s*:\s*([^;]+)/i);
+  if (m) return m[1].trim();
+
+  // 2) background (mais PAS gradient)
+  m = style.match(/background\s*:\s*([^;]+)/i);
+  if (m && !m[1].includes("gradient")) {
+    return m[1].trim();
+  }
+
+  return null;
+}
+
+function pickCssValue(style, prop, fallback = null) {
+  // ex: background: #fff;  background-color: rgba(...);
+  const re = new RegExp(`${prop}\\s*:\\s*([^;]+)`, "i");
+  const m = style.match(re);
+  return m ? m[1].trim() : fallback;
+}
+
+function pickOpacity(style, fallback = 1) {
+  const v = pickCssValue(style, "opacity", null);
+  const n = v != null ? parseFloat(v) : NaN;
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function detectShapeTypeFromClasses(classList) {
+  const known = ["rectangle", "circle", "triangle", "star", "diamond"];
+  for (const k of known) if (classList.contains(k)) return k;
+  return "rectangle";
+}
+
+// ==============================
+// IMPORT PROJECT (JSON with base64)
+// ==============================
+export function importProjectFromJSON(jsonText) {
+  return new Promise((resolve, reject) => {
+    // ⚠️ Laisse respirer le navigateur
+    setTimeout(() => {
+      try {
+        const data = JSON.parse(jsonText);
+
+        // Validation minimale
+        if (!data || !Array.isArray(data.slides)) {
+          reject("Structure JSON invalide");
+          return;
+        }
+
+        // Remplacement TOTAL de l'état
+        state.slides = data.slides;
+        state.activeSlide = data.activeSlide ?? 0;
+
+        // Nettoyage sélection
+        setSelectedId(null);
+
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    }, 0);
+  });
+}
+
+
+
 // =====================================================
 //  PARSE HTML -> { elements, meta }
 // =====================================================
@@ -138,7 +209,7 @@ function parseSlideHTML(htmlContent) {
   const doc = parser.parseFromString(htmlContent, "text/html");
 
   const meta = readSlideMeta(doc);
-
+  const backgroundColor = readSlideBackgroundColor(doc);
   const elements = [];
 
   // 1) Nouveau format: .stage .slide .el
@@ -200,7 +271,16 @@ function parseSlideHTML(htmlContent) {
       } else if (node.classList.contains("image")) {
         type = "image";
         const img = node.querySelector("img");
-        if (img?.getAttribute("src")) imageData = img.getAttribute("src");
+        if (type === "image" && imageData) {
+          // On garde seulement une info légère
+          // si c'est une dataURL (base64), on stocke juste un nom placeholder
+          if (imageData.startsWith("data:image/")) {
+            obj.imageName = obj.imageName || "image_importee.png";
+          } else {
+            // si c'est déjà une URL/chemin relatif web, on le garde comme src
+            obj.imageSrc = imageData;
+          }
+        }
       }
     }
 
@@ -234,6 +314,51 @@ function parseSlideHTML(htmlContent) {
     };
 
     if (type === "image" && imageData) obj.imageData = imageData;
+
+    // --- SHAPE: récupérer couleur/bordure/opacity + shapeType ---
+    if (type === "shape") {
+      // shapeType via classes (car export ajoute el.shapeType en classe)
+      obj.shapeType = detectShapeTypeFromClasses(node.classList);
+
+      // fillColor: background-color puis background (si pas gradient)
+      // Dans l'export, la couleur de la shape est mise sur
+      // .shape-content-wrapper (wrapper interne). On tente donc
+      // d'abord de lire le style de ce wrapper, puis on tombe
+      // sur le style de l'élément parent si absent.
+      const inner = node.querySelector('.shape-content-wrapper');
+      const innerStyle = inner ? (inner.getAttribute('style') || '') : style;
+
+      let bg = pickCssValue(innerStyle, "background-color", null);
+      if (!bg) bg = pickCssValue(innerStyle, "background", null);
+
+      // si c'est un gradient on garde quand même (ton app accepte background en fillColor)
+      // MAIS si tu veux refuser les gradients, remplace par: if (bg?.includes("gradient")) bg = null;
+
+      obj.fillColor = bg || "#7c5cff";          // fallback par défaut
+      obj.borderColor = pickCssValue(innerStyle, "border-color", pickCssValue(style, "border-color", "#37d6ff"));
+      obj.opacity = pickOpacity(innerStyle, pickOpacity(style, 1));
+    }
+
+    // --- TEXT / BUTTON: récupérer couleur, taille, police, alignement, style ---
+    if (type === "text" || type === "button") {
+      const color = pickCssValue(style, 'color', null);
+      if (color) obj.color = color;
+
+      const fs = pickNumberPx(style, 'font-size', null);
+      if (fs !== null) obj.fontSize = Math.round(fs);
+
+      const fw = pickCssValue(style, 'font-weight', null);
+      if (fw) obj.fontWeight = fw;
+
+      const ff = pickCssValue(style, 'font-family', null);
+      if (ff) obj.fontFamily = ff.replace(/['\"]/g, '').trim();
+
+      const ta = pickCssValue(style, 'text-align', null);
+      if (ta) obj.textAlign = ta;
+
+      const fst = pickCssValue(style, 'font-style', null);
+      if (fst) obj.fontStyle = fst;
+    }
 
     elements.push(obj);
   });
@@ -269,7 +394,8 @@ function parseSlideHTML(htmlContent) {
       pos: meta?.pos ?? { x: 0, y: 0 },
       buttonsMeta
     },
-    elements
+    elements,
+    backgroundColor
   };
 }
 
@@ -307,7 +433,8 @@ function loadSlidesFromFiles(files) {
         arbre: {
           title: meta.title ?? file.name.replace(/\.html$/i, ""),
           pos: meta.pos ?? { x: 0, y: 0 }
-        }
+        },
+        backgroundColor: parsed.backgroundColor || "#ffffff",
       };
 
 
@@ -372,3 +499,191 @@ document.getElementById("exportBtn").addEventListener("click", () => {
   });
   
 });
+
+// ==============================
+// UI: IMPORT PROJECT BUTTON
+// ==============================
+const importBtn = document.getElementById("importProjectBtn");
+const importInput = document.getElementById("importProjectInput");
+
+if (importBtn && importInput) {
+  importBtn.addEventListener("click", () => {
+    importInput.value = "";
+    importInput.click();
+  });
+
+  importInput.addEventListener("change", () => {
+    const file = importInput.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      importProjectFromJSON(e.target.result)
+        .then(() => {
+          render();
+          thumbsEl.scrollLeft = 0;
+          alert("✓ Projet importé avec succès");
+        })
+        .catch((err) => {
+          console.error(err);
+          alert("Erreur lors de l'import du projet");
+        });
+    };
+    const importImagesInput = document.getElementById("importImagesInput");
+
+    function relinkImagesWithFiles(files) {
+      const map = new Map(Array.from(files).map(f => [f.name, f]));
+
+      state.slides.forEach(slide => {
+        (slide.elements || []).forEach(el => {
+          if (el.type === "image" && el.imageName) {
+            const f = map.get(el.imageName);
+            if (f) el.imageSrc = URL.createObjectURL(f);
+          }
+        });
+      });
+    }
+
+    let waitingImages = false;
+
+    importInput.addEventListener("change", () => {
+      reader.onload = (e) => {
+        importProjectFromJSON(e.target.result)
+          .then(() => {
+            waitingImages = true;
+            importImagesInput.value = "";
+            importImagesInput.click();
+          })
+          .catch(() => alert("Erreur import projet"));
+      };
+    });
+
+    importImagesInput.addEventListener("change", (ev) => {
+      if (!waitingImages) return;
+      waitingImages = false;
+
+      relinkImagesWithFiles(ev.target.files);
+      render();
+      thumbsEl.scrollLeft = 0;
+      ev.target.value = "";
+    });
+    reader.readAsText(file);
+  });
+}
+
+
+// ==============================
+// UI: DOWNLOAD PROJECT (slides_state JSON)
+// ==============================
+const downloadProjectBtn = document.getElementById("downloadProjectBtn");
+
+if (downloadProjectBtn) {
+  downloadProjectBtn.addEventListener("click", () => {
+    // On exporte l'état courant (sans toucher aux autres fichiers)
+    const project = {
+      activeSlide: state.activeSlide,
+      slides: state.slides,
+    };
+
+    const json = JSON.stringify(project, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+
+    // Nom de fichier propre
+    const date = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const fileName = `slides_state_${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+      date.getDate()
+    )}_${pad(date.getHours())}-${pad(date.getMinutes())}.json`;
+
+    a.download = fileName;
+
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+}
+
+const exportPdfProjectBtn = document.getElementById("exportPdfProjectBtn");
+
+if (exportPdfProjectBtn) {
+  exportPdfProjectBtn.addEventListener("click", async () => {
+    const { jsPDF } = window.jspdf;
+
+    const slidesCount = state.slides.length;
+    if (!slidesCount) {
+      alert("Aucune slide à exporter");
+      return;
+    }
+
+    const prev = state.activeSlide;
+
+    const pdf = new jsPDF({
+      orientation: "landscape",
+      unit: "mm",
+      format: "a4",
+    });
+
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+
+    // petit helper pour attendre que le DOM se mette à jour
+    const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
+    const waitDOM = async () => { await nextFrame(); await nextFrame(); };
+
+    for (let i = 0; i < slidesCount; i++) {
+      state.activeSlide = i;
+      render();
+      await waitDOM();
+
+      const slideEl = document.getElementById("slide");
+      if (!slideEl) {
+        console.warn("Élément #slide introuvable");
+        break;
+      }
+
+      // capture
+      const canvas = await html2canvas(slideEl, {
+        scale: 2,
+        backgroundColor: null,
+        useCORS: true,
+      });
+
+      const imgData = canvas.toDataURL("image/png");
+
+      // calcul du scale pour rentrer dans A4
+      const imgRatio = canvas.width / canvas.height;
+      const pageRatio = pageWidth / pageHeight;
+
+      let renderW, renderH;
+      if (imgRatio > pageRatio) {
+        renderW = pageWidth;
+        renderH = pageWidth / imgRatio;
+      } else {
+        renderH = pageHeight;
+        renderW = pageHeight * imgRatio;
+      }
+
+      const x = (pageWidth - renderW) / 2;
+      const y = (pageHeight - renderH) / 2;
+
+      // ✅ IMPORTANT : on ajoute la page APRES avoir une image valide
+      if (i > 0) {
+        pdf.addPage();
+        pdf.setPage(pdf.getNumberOfPages());
+      } else {
+        pdf.setPage(1);
+      }
+
+      pdf.addImage(imgData, "PNG", x, y, renderW, renderH);
+    }
+
+    state.activeSlide = prev;
+    render();
+
+    pdf.save("SlideLab_projet.pdf");
+  });
+}
